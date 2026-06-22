@@ -1,0 +1,117 @@
+   1: Vallen Acquisition R2017.0504.2
+   2: Report File: c:\vallen\log\acq.log
+   3: Created: sabato 6 giugno 2026 - 12:27
+   4: ----------------------------------------------------------------------
+   5: Command line:
+   6: C:\vallen\amsy\acq.exe
+   7: 
+   8: OS: Windows 10 (Version 10.0 Build 19045, 64-bit)
+   9: Memory available to Windows: 20.339,5 MB, 23% in use.
+  10: CPU-Cores detected: 6
+  11: System/User locale: Italian [ITA] / Italian [ITA]
+  12: -----------------------------------------------------------------
+  13: SQLite library: 3.18.0
+  14: Full path: c:\vallen\bin\sqlite3.dll
+  15: ----------------------------------------------------------------------
+  16: 
+  17: 2026-06-06 12:27:49|Accessing device driver...
+  18: 12:27:49|Initializing device ...
+  19: 12:27:49|Opening AMSY-6 device(s) ...
+  20: 12:27:49|Total AMSY-6 device(s) found: 1.
+  21: 
+  22: 12:27:49|Checking AMSY-6 status.
+  23: 12:27:49|Required firmware: 3.05
+  24: 12:27:49|Warm reboot AMSY-6 device(s).
+  25: 12:27:50| 
+  26: 12:27:50|Searching for AMSY-6 Units..
+  27: 12:27:50|AMSY-6 Units(total)               : 1
+  28: 12:27:50|..parameteric inputs (PAx)        : 4
+  29: 12:27:50| 
+  30: 12:27:50|Load FPGA for ASIP-2 boards, slot 1
+  31: 12:27:51|Check ASIP-2 channels.
+  32: 12:27:51|Loading ASIP-2 calibration and configuration data
+  33: 12:27:51|ASIP-2 firmware required: Rev.21.26
+  34: 12:27:51|ASIP-2 boards listing
+  35: 12:27:51|Board: 01.01; Chans:  1 [HP-Hi], 2 [HP-Hi]; VID: 190108-06-0062; TRMem: 16 MB.
+  36: 12:27:51|Board: 01.02; Chans:  3 [HP-Hi], 4 [HP-Hi]; VID: 190108-06-0074; TRMem: 16 MB.
+  37: 12:27:51|ASIP-2 boards detected: 2 (=4 channels), with TR: 2
+  38: 12:27:51|Hardware initialization complete.
+  39: 12:27:51|Loading channel parameters...
+  40: 12:27:52|Loading channel parameters completed.
+  41: 12:27:52|Command completed (0)
+  42: ----------------------------------------------------------------------
+  43: 
+  44: ----------------------------------------------------------------------
+  45: 12:28:27|Control Command: Clear data on all files
+  46: 12:28:28|Command completed (0)
+  47: ----------------------------------------------------------------------
+  48: 
+  49: ----------------------------------------------------------------------
+  50: 12:28:45|Control Command: Load Acquisition
+  51: 12:28:45|Loading channel parameters...
+  52: 12:28:46|Loading channel parameters completed.
+  53: 12:28:46|Command completed (0)
+  54: ----------------------------------------------------------------------
+  55: 
+  56: ----------------------------------------------------------------------
+  57: 12:30:48|Control Command: Prepare Recording
+  58: 12:30:48|Loading channel parameters...
+  59: 12:30:49|Loading channel parameters completed.
+  60: 12:30:49|Informing IOP about new DMA Info
+  61: 12:30:49|Command completed (0)
+  62: ----------------------------------------------------------------------
+  63: 
+  64: ----------------------------------------------------------------------
+  65: 12:30:49|Control Command: Start Recording
+  66: 12:30:49|Data file: C:\Users\admin\Desktop\Registrazione Prove EA\DI ROBERTO MOSCATIELLO 03_06 06_06\06_06\4699292050711MC_EA\4699292050711MC_EA.pridb
+  67: 12:30:49|Start Recording
+  68: 
+  69: 12:30:49|Acquisition started at 06/06/2026 12:30:49
+  70: 12:30:49|Command completed (0)
+  71: ----------------------------------------------------------------------
+  72: 
+  73: 12:30:49| IOP 1>CMD_CL_ENABLE_CYCLE 1
+  74: 12:30:49| IOP 1>Number of active channels: 2
+  75: 12:30:49| IOP 1>Training bus transfer; initial boost dstrb=1
+  76: 12:30:49| IOP 1>Board 01.01: dstrb offset=2 read delay=18
+  77: 12:30:49| IOP 1>CMD_SET_RECORDING AE=1, TR=1
+  78: 12:30:49| IOP 1>1st data arrived (=>RecEnb) DWords read: 36
+  79: ----------------------------------------------------------------------
+  80: 12:30:49|Control Command: Start Pulsing (All Channels)
+  81: 12:30:49|acqctrl: StartPulsing
+  82: 12:30:50|acqctrl: NextPulsingChannel 1 (HW: 01.01.a)
+  83: 12:30:50| IOP 1>
+  84: 12:30:50| IOP 1>Host poll status: last interval = 1 s, dtmax = 92 ms, 11 polls
+  85: 12:30:50| IOP 1>Cycle status: 169594 cycles, avg 169594 cycles/s, dur max = 110, avg = 5 us
+  86: 12:30:50| IOP 1>TR retries 0
+  87: 12:30:50| IOP 1>Temperature: DAC 29, PAP 29
+  88: 12:30:50| IOP 1>CMD_SET_RECORDING AE=0, TR=0
+  89: 12:30:50|Command completed (0)
+  90: ----------------------------------------------------------------------
+  91: 
+  92: 12:30:50| IOP 1>CMD_CL_SET_PULSING_CHAN
+  93: 12:30:51| IOP 1>CMD_SET_RECORDING AE=1, TR=1
+  94: 12:30:51| IOP 1>CMD_CL_SET_PULSING On
+  95: 12:30:51| IOP 1>Adjusted board 01.01; read delay=17, dstrb=1
+  96: ----------------------------------------------------------------------
+  97: 12:30:54|Control Command: Stop Recording
+  98: 12:30:54|acqctrl: StopPulsing
+  99: 12:30:54|Command completed (0)
+ 100: ----------------------------------------------------------------------
+ 101: 
+ 102: 12:30:54| IOP 1>CMD_SET_RECORDING AE=0, TR=0
+ 103: 12:30:54| IOP 1>CMD_CL_SET_PULSING Off
+ 104: 12:30:54| IOP 1>
+ 105: 12:30:54| IOP 1>Host poll status: last interval = 4 s, dtmax = 93 ms, 64 polls
+ 106: 12:30:54| IOP 1>Cycle status: 914023 cycles, avg 228505 cycles/s, dur max = 1230, avg = 4 us
+ 107: 12:30:54| IOP 1>TR retries 2
+ 108: 12:30:54| IOP 1>Temperature: DAC 29, PAP 29
+ 109: 12:30:54| IOP 1>CMD_SET_RECORDING AE=0, TR=0
+ 110: 12:30:55|Acquisition stopped at 06/06/2026 12:30:55
+ 111: 12:30:55|Total AE data size: 96 KB
+ 112: 12:30:55|Total TR data size: 576 KB
+ 113: ----------------------------------------------------------------------
+ 114: 12:30:55|Control Command: Close Acquisition
+ 115: 12:30:55|Command completed (0)
+ 116: ----------------------------------------------------------------------
+ 117: 
