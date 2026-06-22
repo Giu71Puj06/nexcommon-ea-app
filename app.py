@@ -11,8 +11,43 @@ from nexcommon_ea.excel_writer import create_excel_from_summary
 from nexcommon_ea.supabase_io import save_run, enabled as supabase_enabled
 
 st.set_page_config(page_title="Nexcommon EA - Vallen to ITS", layout="wide")
-st.title("Nexcommon EA")
-st.caption("Estrazione automatica dati Vallen e compilazione modulo consegna prove EA ITS")
+
+# -----------------------------------------------------------------------------
+# Intestazione applicazione
+# Mantiene tutte le funzionalita esistenti e aggiunge logo ITS + credit Nexcommon.
+# Per funzionare su Railway, caricare il file "Logo ITS.png" nella root del repo
+# oppure in una delle cartelle: data/, assets/, static/.
+# -----------------------------------------------------------------------------
+
+def find_logo_path() -> Path | None:
+    candidates = [
+        Path("Logo ITS.png"),
+        Path("logo_its.png"),
+        Path("data/Logo ITS.png"),
+        Path("data/logo_its.png"),
+        Path("assets/Logo ITS.png"),
+        Path("assets/logo_its.png"),
+        Path("static/Logo ITS.png"),
+        Path("static/logo_its.png"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+logo_path = find_logo_path()
+
+header_col_logo, header_col_title = st.columns([1, 4])
+with header_col_logo:
+    if logo_path:
+        st.image(str(logo_path), width=240)
+    else:
+        st.markdown("### ITS Controlli Tecnici SpA")
+
+with header_col_title:
+    st.title("Nexcommon EA")
+    st.caption("Estrazione automatica dati Vallen e compilazione modulo consegna prove EA ITS")
+    st.markdown("**Piattaforma creata da Nexcommon Srl**")
 
 with st.sidebar:
     st.header("Configurazione")
@@ -20,6 +55,8 @@ with st.sidebar:
     gamma_manuale = st.number_input("Y Max / Gamma Max manuale, solo se manca BD/API", min_value=0.0, max_value=5.0, value=0.0, step=0.01)
     classe_manuale = st.selectbox("Classe prova", ["", "0", "1", "2"], index=0)
     st.info("Gamma Max non è sempre salvato nel PRIDB. Caricare anche BD.txt/listato quando disponibile.")
+    st.markdown("---")
+    st.caption("Piattaforma creata da Nexcommon Srl")
 
 zip_file = st.file_uploader("Carica ZIP Vallen o PRIDB", type=["zip", "pridb"])
 bd_file = st.file_uploader("Opzionale: carica BD.txt o listato Vallen con Gamma Max", type=["txt", "csv", "log"])
@@ -83,3 +120,11 @@ if "summary" in st.session_state:
 if "excel_path" in st.session_state:
     path = Path(st.session_state["excel_path"])
     st.download_button("Scarica modulo ITS compilato", data=path.read_bytes(), file_name=path.name, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+st.markdown("---")
+footer_col_left, footer_col_right = st.columns([2, 1])
+with footer_col_left:
+    st.caption("Piattaforma creata da Nexcommon Srl")
+with footer_col_right:
+    if logo_path:
+        st.image(str(logo_path), width=160)
