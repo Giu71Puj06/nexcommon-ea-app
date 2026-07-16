@@ -103,8 +103,16 @@ def create_excel_from_summary(summary: dict, output_path: str | Path, template_p
     if summary.get("matricola"):
         ws.cell(row=row, column=4).value = summary["matricola"]
 
+    # Località (colonna E) e Provincia (colonna F): dal master, per matricola.
+    if summary.get("localita"):
+        ws.cell(row=row, column=5).value = summary["localita"]
+
     if summary.get("provincia"):
         ws.cell(row=row, column=6).value = summary["provincia"]
+
+    # Cliente / gasista (colonna G): dal master (proprietario).
+    if summary.get("cliente"):
+        ws.cell(row=row, column=7).value = summary["cliente"]
 
     if summary.get("ora_inizio_pressurizzazione"):
         ws.cell(row=row, column=9).value = str(summary["ora_inizio_pressurizzazione"]).replace(":", ".")
@@ -112,18 +120,36 @@ def create_excel_from_summary(summary: dict, output_path: str | Path, template_p
     ws.cell(row=row, column=11).value = _to_excel_num(summary.get("pressione_inizio_bar"))
     ws.cell(row=row, column=12).value = _to_excel_num(summary.get("pressione_fine_bar"))
 
-    if summary.get("gamma_max") is not None:
-        ws.cell(row=row, column=13).value = _to_excel_num(summary.get("gamma_max"))
+    gamma = summary.get("gamma_max")
+    if gamma is not None:
+        ws.cell(row=row, column=13).value = _to_excel_num(gamma)
 
+    # Esito (colonna N). La classificazione INAIL definitiva dipende da piu
+    # controlli; qui restiamo prudenti e non dichiariamo IDONEO in automatico
+    # senza la classe fornita dall'operatore.
     if summary.get("classe"):
         ws.cell(row=row, column=14).value = "IDONEO" if str(summary.get("classe")) == "1" else "NON IDONEO"
-    elif summary.get("gamma_max") is not None:
-        ws.cell(row=row, column=14).value = "DA VERIFICARE"
+    elif gamma is not None:
+        # Indicazione preliminare rispetto al limite di accettabilita (gamma lim
+        # = 0,95 GPOL/CC; 0,87 REAS). Da confermare con i controlli completi.
+        ws.cell(row=row, column=14).value = (
+            "DA VERIFICARE (γ>lim)" if gamma > 0.87 else "DA VERIFICARE (γ≤lim)"
+        )
     else:
         ws.cell(row=row, column=14).value = "Y MAX DA BD/API"
 
+    # In sostituzione di (colonna P): matricola sostituita, dal master.
+    if summary.get("in_sostituzione_di"):
+        ws.cell(row=row, column=16).value = summary["in_sostituzione_di"]
+
     if summary.get("lotto"):
         ws.cell(row=row, column=17).value = summary["lotto"]
+
+    # A1-A4 (colonne R/S/T/U): variazioni della Calibration Table Vallen
+    # (verifica di funzionalita, confronto tra i canali C1 e C2).
+    for a_key, col in (("a1", 18), ("a2", 19), ("a3", 20), ("a4", 21)):
+        if summary.get(a_key) is not None:
+            ws.cell(row=row, column=col).value = summary[a_key]
 
     note = []
 
@@ -136,8 +162,26 @@ def create_excel_from_summary(summary: dict, output_path: str | Path, template_p
     if summary.get("rms_fondo_finale_uv") is not None:
         note.append(f"RMS FF {summary['rms_fondo_finale_uv']:.2f} uV")
 
-    if summary.get("gamma_max") is None:
-        note.append("Gamma non presente nel PRIDB: caricare BD.txt/listato o API Vallen")
+    # Traccia la provenienza delle pressioni quando non arrivano dai marker.
+    fonte_p = summary.get("fonte_pressione")
+    if fonte_p and "IP1" not in str(fonte_p):
+        note.append(f"pressioni da {fonte_p}")
+
+    if gamma is not None and summary.get("gamma_source"):
+        note.append(f"γmax da {summary['gamma_source']}")
+    elif gamma is None:
+        note.append("Gamma non presente nel PRIDB: caricare listato/BD Vallen o inserire manualmente")
+
+    # Stato anagrafica: segnala se la matricola non e stata trovata nel master.
+    stato = summary.get("anagrafica_stato")
+    if stato and "non trovata" in str(stato):
+        note.append("matricola non in anagrafica: Prov./Località/Cliente da inserire")
+
+    # A1-A4 (colonne R/S/T/U): dalla Calibration Table (verifica funzionalità).
+    if summary.get("a1") is not None:
+        note.append("A1-A4 da Calibration Table (Δ funzionalità, da verificare)")
+    else:
+        note.append("A1-A4 (R/S/T/U): dati di pulsing non disponibili")
 
     ws.cell(row=row, column=15).value = " | ".join(note)
 

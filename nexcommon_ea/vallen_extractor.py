@@ -88,6 +88,109 @@ def _num(value):
         return None
 
 
+def parse_gamma_from_text(text: str) -> dict:
+    """
+    Estrae Gamma Max (Y Max) da un file di supporto, gestendo due formati:
+
+    1) Record INAIL 'BD' con campi separati da ';' (Appendice D).
+    2) Esportazione / listato Vallen VisualAE che contiene la colonna
+       Gamma (o GammaMax, Y Max, γ). In questo caso si prende il valore
+       massimo osservato = gamma max.
+
+    Ritorna un dizionario con almeno 'gamma_max' quando trovato.
+    """
+    if not text:
+        return {}
+
+    # --- Formato BD INAIL (prioritario se presente) ---
+    bd = parse_bd_gamma(text)
+    if bd.get("gamma_max") is not None:
+        bd["gamma_source"] = "BD INAIL"
+        return bd
+
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return {}
+
+    # --- Etichetta esplicita 'GammaMax'/'Y Max'/'Gamma max = 0,51' ---
+    label_re = re.compile(
+        r"(?:gamma\s*max|gammamax|y\s*max|\bymax\b|\bγm\b|γ\s*max)\s*[=:\s]\s*([0-9]+[.,]?[0-9]*)",
+        re.IGNORECASE,
+    )
+    label_hits = [
+        _num(m.group(1))
+        for ln in lines
+        for m in [label_re.search(ln)]
+        if m
+    ]
+    label_hits = [v for v in label_hits if v is not None]
+    if label_hits:
+        return {"gamma_max": max(label_hits), "gamma_source": "listato Vallen (etichetta)"}
+
+    # --- Listato tabellare con colonna Gamma / γ ---
+    def split(line):
+        for sep in ("\t", ";", ","):
+            if sep in line:
+                return [c.strip() for c in line.split(sep)]
+        return line.split()
+
+    rows = [split(ln) for ln in lines]
+    gamma_col = None
+    header_idx = None
+    for idx, cells in enumerate(rows):
+        lowered = [c.lower() for c in cells]
+        for i, c in enumerate(lowered):
+            if c in ("gamma", "γ", "gammamax", "y", "ymax", "y max"):
+                gamma_col, header_idx = i, idx
+                break
+        if gamma_col is not None:
+            break
+
+    if gamma_col is not None:
+        values = []
+        for cells in rows[header_idx + 1:]:
+            if gamma_col < len(cells):
+                v = _num(cells[gamma_col])
+                if v is not None:
+                    values.append(v)
+        if values:
+            return {"gamma_max": max(values), "gamma_source": "listato Vallen (colonna Gamma)"}
+
+    return {}
+
+
+def detect_pressurization_window(pressure_points: list, markers: dict) -> dict:
+    """
+    Ricava pressione di inizio e fine pressurizzazione DIRETTAMENTE dalla
+    curva di pressione (canale PA0), utile quando i marker IP1/FP1 non
+    sono presenti o non vengono riconosciuti.
+
+    Logica: la fase di pressurizzazione e la rampa dalla pressione di
+    base (baseline iniziale) fino alla pressione massima raggiunta.
+    - pressione_inizio = pressione di base prima della rampa
+    - pressione_fine   = pressione massima (al termine della rampa)
+    """
+    if not pressure_points:
+        return {}
+
+    pts = sorted(pressure_points, key=lambda x: x[0])
+    pressures = [p for _, p in pts]
+    p_max = max(pressures)
+    i_max = pressures.index(p_max)
+
+    # Baseline: mediana del primo 10% dei campioni prima della salita.
+    head = pressures[: max(1, i_max // 10 or 1)]
+    head_sorted = sorted(head)
+    baseline = head_sorted[len(head_sorted) // 2]
+
+    return {
+        "pressione_inizio_bar": baseline,
+        "pressione_fine_bar": p_max,
+        "pressione_max_bar": p_max,
+        "fonte_pressione": "curva PA0 (marker IP1/FP1 assenti)",
+    }
+
+
 def extract_from_pridb(pridb_path: Path, vaex_path: Path | None = None, bd_text: str | None = None) -> dict:
     offset, factor = get_pressure_scaling(vaex_path)
     con = sqlite3.connect(str(pridb_path))
@@ -106,9 +209,9 @@ def extract_from_pridb(pridb_path: Path, vaex_path: Path | None = None, bd_text:
     for row in con.execute("select SetID, Number, Data, SetType, Time from view_ae_markers order by SetID"):
         txt = row["Data"] or ""
         code = None
-        match = re.search(r"\b(" + "|".join(PHASE_CODES) + r")\b", txt)
+        match = re.search(r"\b(" + "|".join(PHASE_CODES) + r")\b", txt, re.IGNORECASE)
         if match:
-            code = match.group(1)
+            code = match.group(1).upper()
             markers[code] = float(row["Time"])
         marker_rows.append({"codice": code or "", "testo": txt, "tempo_s": float(row["Time"])})
 
@@ -169,6 +272,19 @@ def extract_from_pridb(pridb_path: Path, vaex_path: Path | None = None, bd_text:
     con.close()
 
     press = phases["pressurizzazione"]
+
+    # Fallback: se i marker IP1/FP1 non hanno prodotto le pressioni, ricavale
+    # dalla curva PA0. Cosi le colonne K/L del modulo ITS vengono comunque
+    # compilate, perche il dato di pressione e sempre presente nel Vallen.
+    fonte_pressione = "marker IP1/FP1"
+    if press.get("pressione_inizio_bar") is None or press.get("pressione_fine_bar") is None:
+        fallback = detect_pressurization_window(pressure_points, markers)
+        if fallback:
+            for k in ("pressione_inizio_bar", "pressione_fine_bar", "pressione_max_bar"):
+                if press.get(k) is None and fallback.get(k) is not None:
+                    press[k] = fallback[k]
+            fonte_pressione = fallback.get("fonte_pressione", fonte_pressione)
+
     delta_p = None
     grad = None
     if press.get("pressione_inizio_bar") is not None and press.get("pressione_fine_bar") is not None:
@@ -198,11 +314,25 @@ def extract_from_pridb(pridb_path: Path, vaex_path: Path | None = None, bd_text:
         "eventi_fondo_finale_ge_75db": phases["fondo_finale"].get("eventi_ge_75db"),
         "eventi_fondo_finale_ge_85db": phases["fondo_finale"].get("eventi_ge_85db"),
         "gamma_max": None,
+        "gamma_source": "",
+        "fonte_pressione": fonte_pressione,
         "interruzione_precauzionale": "N",
         "fondo_finale_esito": "",
         "classe": "",
     }
     if bd_text:
-        summary.update({k: v for k, v in parse_bd_gamma(bd_text).items() if v is not None and v != ""})
+        parsed = parse_gamma_from_text(bd_text)
+        summary.update({k: v for k, v in parsed.items() if v is not None and v != ""})
 
-    return {"summary": summary, "phases": phases, "markers": marker_rows}
+    # Calibration Table -> A1-A4 (verifica di funzionalita, confronto canali).
+    try:
+        from nexcommon_ea.calibration import extract_calibration
+        calib = extract_calibration(pridb_path)
+        if calib.get("disponibile"):
+            for a in ("A1", "A2", "A3", "A4"):
+                if calib.get(a) is not None:
+                    summary[a.lower()] = calib[a]
+    except Exception:
+        calib = {"disponibile": False}
+
+    return {"summary": summary, "phases": phases, "markers": marker_rows, "calibration": calib}
