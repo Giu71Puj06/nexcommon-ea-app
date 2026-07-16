@@ -8,6 +8,7 @@ import streamlit as st
 from nexcommon_ea.vallen_extractor import resolve_vallen_input, extract_from_pridb
 from nexcommon_ea.excel_writer import create_excel_from_summary
 from nexcommon_ea.supabase_io import enabled as supabase_enabled
+from nexcommon_ea import package_reader as pkg
 
 
 st.set_page_config(
@@ -34,6 +35,26 @@ def _find_logo() -> Path | None:
 
 def _logo_as_base64(path: Path) -> str:
     return base64.b64encode(path.read_bytes()).decode("utf-8")
+
+
+@st.cache_data(show_spinner=False)
+def _photo_preview(path_str: str, max_side: int = 1400) -> bytes:
+    """
+    Legge una foto dal pacchetto e la ridimensiona per la visualizzazione.
+    Le foto da smartphone sono spesso 3000-4000 px: ridurle evita di
+    appesantire la pagina. Corregge anche l'orientamento EXIF.
+    """
+    from io import BytesIO
+    from PIL import Image, ImageOps
+
+    img = Image.open(path_str)
+    img = ImageOps.exif_transpose(img)  # raddrizza le foto ruotate dal telefono
+    img.thumbnail((max_side, max_side))
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
 
 
 logo_path = _find_logo()
@@ -252,14 +273,37 @@ with col1:
                     data["summary"]["gamma_max"] = gamma_manuale
                 if classe_manuale:
                     data["summary"]["classe"] = classe_manuale
+                # Foto contenute nel pacchetto Vallen (dentro lo ZIP).
+                photos = [str(p) for p in pkg.collect_photos(workdir)]
+
+                # Foto caricata manualmente: la conserviamo e la mostriamo anche.
                 if photo_file:
                     tmp_photo = Path(tempfile.mkdtemp(prefix="nexcommon_photo_")) / photo_file.name
                     tmp_photo.write_bytes(photo_file.getbuffer())
                     data["summary"]["foto_targa_pozzetto"] = str(tmp_photo)
+                    if str(tmp_photo) not in photos:
+                        photos.append(str(tmp_photo))
+
+                # Inventario formati + metadati log + sintesi forme d'onda.
+                inventory = pkg.inventory_package(workdir)
+                acq_meta = {}
+                log_files = [p for p in inventory["log"] if "(2)" not in p.name] or inventory["log"]
+                if log_files:
+                    acq_meta = pkg.parse_acq_log(pkg.read_log_text(log_files[0]))
+                tradb_info = pkg.tradb_summary(inventory["tradb"][0]) if inventory["tradb"] else {}
+
                 st.session_state["workdir"] = str(workdir)
                 st.session_state["summary"] = data["summary"]
                 st.session_state["phases"] = data["phases"]
-                st.success("Dati estratti correttamente.")
+                st.session_state["photos"] = photos
+                st.session_state["inventory"] = {k: [str(p) for p in v] for k, v in inventory.items()}
+                st.session_state["acq_meta"] = acq_meta
+                st.session_state["tradb_info"] = tradb_info
+                st.session_state["tradb_path"] = str(inventory["tradb"][0]) if inventory["tradb"] else ""
+                st.success(
+                    f"Dati estratti. Trovate {len(photos)} foto e "
+                    f"{tradb_info.get('forme_onda', 0)} forme d'onda nel pacchetto."
+                )
             except Exception as exc:
                 st.exception(exc)
 
@@ -280,6 +324,112 @@ if "summary" in st.session_state:
     df = pd.DataFrame([st.session_state["summary"]]).T.reset_index()
     df.columns = ["Campo", "Valore"]
     st.dataframe(df, use_container_width=True, hide_index=True)
+
+# --- Formati contenuti nel pacchetto Vallen ---------------------------------
+if st.session_state.get("inventory"):
+    inv = st.session_state["inventory"]
+    st.markdown("### Formati nel pacchetto")
+    etichette = {
+        "pridb": "PRIDB (dati prova)",
+        "tradb": "TRADB (forme d'onda)",
+        "vaex": "VAEX (configurazione)",
+        "log": "Log acquisizione",
+        "foto": "Foto",
+        "altri": "Altri file",
+    }
+    righe = []
+    for chiave, label in etichette.items():
+        files = inv.get(chiave, [])
+        if files:
+            righe.append({
+                "Formato": label,
+                "N. file": len(files),
+                "File": ", ".join(Path(f).name for f in files),
+            })
+    if righe:
+        st.dataframe(pd.DataFrame(righe), use_container_width=True, hide_index=True)
+
+# --- Foto della prova -------------------------------------------------------
+if st.session_state.get("photos"):
+    photos = st.session_state["photos"]
+    st.markdown("### Foto della prova")
+    st.caption("Immagini estratte dal pacchetto Vallen (targa, pozzetto, strumentazione).")
+    cols = st.columns(2)
+    for i, photo_path in enumerate(photos):
+        if not Path(photo_path).exists():
+            continue
+        with cols[i % 2]:
+            try:
+                st.image(
+                    _photo_preview(photo_path),
+                    caption=Path(photo_path).name,
+                    use_container_width=True,
+                )
+            except Exception as exc:
+                st.warning(f"Impossibile aprire {Path(photo_path).name}: {exc}")
+            with open(photo_path, "rb") as fh:
+                st.download_button(
+                    "Scarica originale",
+                    data=fh.read(),
+                    file_name=Path(photo_path).name,
+                    mime="image/jpeg",
+                    key=f"dl_photo_{i}",
+                    use_container_width=True,
+                )
+
+# --- Log di acquisizione ----------------------------------------------------
+if st.session_state.get("acq_meta"):
+    meta = st.session_state["acq_meta"]
+    with st.expander("Log di acquisizione (dettagli strumento)"):
+        etichette_log = {
+            "software": "Software Vallen",
+            "creato": "Creato il",
+            "sistema": "Sistema operativo",
+            "locale": "Locale sistema/utente",
+            "unita_amsy6": "Unita AMSY-6",
+            "schede": "Schede / canali",
+            "canali_totali": "Canali totali",
+            "fine_acquisizione": "Fine acquisizione",
+            "dimensione_dati_ae": "Dimensione dati AE",
+            "dimensione_dati_tr": "Dimensione dati TR",
+        }
+        righe_log = [
+            {"Campo": etichette_log.get(k, k), "Valore": v}
+            for k, v in meta.items()
+        ]
+        st.dataframe(pd.DataFrame(righe_log), use_container_width=True, hide_index=True)
+
+# --- Forme d'onda (TRADB) ---------------------------------------------------
+if st.session_state.get("tradb_info") and st.session_state.get("tradb_path"):
+    info = st.session_state["tradb_info"]
+    with st.expander(
+        f"Forme d'onda transienti: {info.get('forme_onda', 0)} disponibili "
+        f"({info.get('sample_rate_mhz', '?')} MHz, canali {info.get('canali')})"
+    ):
+        waveforms = pkg.list_waveforms(st.session_state["tradb_path"], limit=40)
+        if waveforms:
+            def _label(w):
+                return (
+                    f"TRAI {w['trai']} - ch{w['canale']} - "
+                    f"{w['campioni']} campioni"
+                )
+            scelta = st.selectbox(
+                "Seleziona una forma d'onda",
+                options=waveforms,
+                format_func=_label,
+            )
+            wf = pkg.load_waveform(st.session_state["tradb_path"], scelta["trai"])
+            if wf:
+                chart_df = pd.DataFrame({"mV": wf["mv"]}, index=wf["tempo_ms"])
+                chart_df.index.name = "Tempo (ms)"
+                st.line_chart(chart_df, use_container_width=True)
+                m = wf["meta"]
+                st.caption(
+                    f"TRAI {m['trai']} - canale {m['canale']} - "
+                    f"{m['sample_rate_mhz']} MHz - picco {m['picco_mv']} mV"
+                )
+        else:
+            st.info("Nessuna forma d'onda leggibile nel TRADB.")
 
 if "excel_path" in st.session_state:
     path = Path(st.session_state["excel_path"])
