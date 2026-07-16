@@ -9,6 +9,7 @@ from nexcommon_ea.vallen_extractor import resolve_vallen_input, extract_from_pri
 from nexcommon_ea.excel_writer import create_excel_from_summary
 from nexcommon_ea.supabase_io import enabled as supabase_enabled
 from nexcommon_ea import package_reader as pkg
+from nexcommon_ea import anagrafica as ana
 
 
 st.set_page_config(
@@ -250,8 +251,14 @@ st.markdown(
 
 zip_file = st.file_uploader("Carica ZIP Vallen o PRIDB", type=["zip", "pridb"])
 bd_file = st.file_uploader(
-    "Opzionale: carica BD.txt o listato Vallen con Gamma Max",
-    type=["txt", "csv", "log"],
+    "Opzionale: BD INAIL o listato/export Vallen con la colonna Gamma "
+    "(per compilare la colonna Y Max)",
+    type=["txt", "csv", "log", "tsv", "dat"],
+)
+master_file = st.file_uploader(
+    "Anagrafica master serbatoi (Excel): Provincia, Località, Cliente e Y Max "
+    "vengono presi da qui in base alla matricola",
+    type=["xlsx", "xlsm"],
 )
 photo_file = st.file_uploader(
     "Opzionale: foto targa/pozzetto da mantenere nella sessione",
@@ -271,8 +278,18 @@ with col1:
                 data = extract_from_pridb(pridb, vaex, bd_text)
                 if gamma_manuale > 0 and data["summary"].get("gamma_max") is None:
                     data["summary"]["gamma_max"] = gamma_manuale
+                    data["summary"]["gamma_source"] = "inserimento manuale"
                 if classe_manuale:
                     data["summary"]["classe"] = classe_manuale
+
+                # Integrazione dai dati anagrafici del master (Provincia,
+                # Località, Cliente, Y Max) in base alla matricola.
+                if master_file:
+                    tmp_master = Path(tempfile.mkdtemp(prefix="nexcommon_master_")) / master_file.name
+                    tmp_master.write_bytes(master_file.getbuffer())
+                    registry = ana.load_registry(tmp_master)
+                    record = ana.lookup(registry, data["summary"].get("matricola"))
+                    ana.enrich_summary(data["summary"], record)
                 # Foto contenute nel pacchetto Vallen (dentro lo ZIP).
                 photos = [str(p) for p in pkg.collect_photos(workdir)]
 
@@ -300,6 +317,7 @@ with col1:
                 st.session_state["acq_meta"] = acq_meta
                 st.session_state["tradb_info"] = tradb_info
                 st.session_state["tradb_path"] = str(inventory["tradb"][0]) if inventory["tradb"] else ""
+                st.session_state["calibration"] = data.get("calibration", {})
                 st.success(
                     f"Dati estratti. Trovate {len(photos)} foto e "
                     f"{tradb_info.get('forme_onda', 0)} forme d'onda nel pacchetto."
@@ -321,6 +339,46 @@ with col2:
 
 if "summary" in st.session_state:
     st.markdown("### Dati estratti")
+
+    s = st.session_state["summary"]
+    # Riepilogo dei campi chiave del modulo ITS (K, L, M) con la loro fonte.
+    c1, c2, c3 = st.columns(3)
+    pi = s.get("pressione_inizio_bar")
+    pf = s.get("pressione_fine_bar")
+    gm = s.get("gamma_max")
+    c1.metric("Inizio press. (bar)", f"{pi:.3f}" if pi is not None else "—")
+    c2.metric("Fine press. (bar)", f"{pf:.3f}" if pf is not None else "—")
+    c3.metric("Y Max / Gamma", f"{gm:.3f}" if gm is not None else "—")
+
+    fonte_p = s.get("fonte_pressione", "")
+    if pi is not None and "IP1" not in str(fonte_p):
+        st.caption(f"Pressioni ricavate da: {fonte_p}")
+
+    stato_ana = s.get("anagrafica_stato")
+    if stato_ana:
+        if "non trovata" in str(stato_ana):
+            st.warning(
+                f"Anagrafica: {stato_ana}. Provincia, Località, Cliente e Y Max "
+                "non sono stati compilati dal master per questa matricola — "
+                "verifica il numero o inseriscili manualmente."
+            )
+        else:
+            prov = s.get("provincia", "—")
+            loc = s.get("localita", "—")
+            cli = s.get("cliente", "—")
+            st.success(f"Anagrafica {stato_ana}: {prov} · {loc} · {cli}")
+
+    if gm is None:
+        st.warning(
+            "Y Max / Gamma non è un valore salvato nei file grezzi Vallen "
+            "(pridb/tradb/vaex): il VAEX definisce il processore ICSE che lo "
+            "calcola, ma il risultato vive in VisualAE. Per compilare la colonna "
+            "carica il listato/export Vallen con la colonna Gamma, oppure "
+            "inserisci il valore manualmente nella barra laterale."
+        )
+    elif s.get("gamma_source"):
+        st.caption(f"Y Max / Gamma da: {s['gamma_source']}")
+
     df = pd.DataFrame([st.session_state["summary"]]).T.reset_index()
     df.columns = ["Campo", "Valore"]
     st.dataframe(df, use_container_width=True, hide_index=True)
@@ -376,6 +434,37 @@ if st.session_state.get("photos"):
                     key=f"dl_photo_{i}",
                     use_container_width=True,
                 )
+
+# --- Calibration Table (verifica di funzionalità -> A1-A4) ------------------
+if st.session_state.get("calibration", {}).get("disponibile"):
+    cal = st.session_state["calibration"]
+    with st.expander("Calibration Table (verifica funzionalità → A1-A4)"):
+        st.caption(
+            "Ampiezze di auto-impulso e ricevute per canale, all'inizio e alla "
+            "fine prova. A1-A4 = variazione (finale − iniziale). Confronta con "
+            "la pagina Calibration Table di VisualAE."
+        )
+        righe_cal = []
+        for fase, key in [("Iniziale", "iniziale"), ("Finale", "finale")]:
+            tab = cal.get(key, {})
+            for ch in cal.get("canali", []):
+                v = tab.get(ch, {})
+                righe_cal.append({
+                    "Fase": fase,
+                    "Canale": ch,
+                    "Auto-impulso (dB)": v.get("self"),
+                    "Ricevuta (dB)": v.get("recv"),
+                })
+        if righe_cal:
+            st.dataframe(pd.DataFrame(righe_cal), use_container_width=True, hide_index=True)
+        cc = st.columns(4)
+        for col, a in zip(cc, ["A1", "A2", "A3", "A4"]):
+            val = cal.get(a)
+            col.metric(a, f"{val:+d}" if isinstance(val, int) else "—")
+        st.caption(
+            "Verifica i valori A1-A4 rispetto a VisualAE prima della consegna: "
+            "sono ricostruiti dai dati di pulsing del PRIDB."
+        )
 
 # --- Log di acquisizione ----------------------------------------------------
 if st.session_state.get("acq_meta"):
