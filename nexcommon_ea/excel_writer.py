@@ -100,21 +100,30 @@ def create_excel_from_summary(summary: dict, output_path: str | Path,
     col, ripiego = mappa_colonne(ws)
     riga_iniziale = prima_riga_dati(ws, col)
     row = _find_or_next_row(ws, summary.get("matricola", ""),
-                            col["matricola"], riga_iniziale)
+                            col.get("matricola") or 4, riga_iniziale)
 
     def scrivi(campo, valore):
-        if campo in col and valore not in (None, ""):
-            ws.cell(row=row, column=col[campo]).value = valore
+        colonna = col.get(campo)
+        if colonna and valore not in (None, ""):
+            ws.cell(row=row, column=colonna).value = valore
 
-    if summary.get("laboratorio"):
-        ws.cell(row=row, column=col["lab"]).value = summary["laboratorio"]
+    # Numero progressivo: prosegue la numerazione della riga precedente.
+    if col.get("id") and not ws.cell(row=row, column=col["id"]).value:
+        precedente = ws.cell(row=row - 1, column=col["id"]).value
+        try:
+            ws.cell(row=row, column=col["id"]).value = int(precedente) + 1
+        except (TypeError, ValueError):
+            ws.cell(row=row, column=col["id"]).value = 1
+
+    scrivi("lab", summary.get("laboratorio"))
 
     # Data prova: scritta come vera data Excel e visualizzata GG/MM/AAAA.
     if summary.get("data_prova"):
         data_excel = _to_excel_date(summary.get("data_prova"))
-        ws.cell(row=row, column=col["data"]).value = data_excel
-        if isinstance(data_excel, date):
-            ws.cell(row=row, column=col["data"]).number_format = "DD/MM/YYYY"
+        if col.get("data"):
+            ws.cell(row=row, column=col["data"]).value = data_excel
+            if isinstance(data_excel, date):
+                ws.cell(row=row, column=col["data"]).number_format = "DD/MM/YYYY"
 
     scrivi("matricola", summary.get("matricola"))
     scrivi("localita", summary.get("localita"))
@@ -163,7 +172,7 @@ def create_excel_from_summary(summary: dict, output_path: str | Path,
     # A1-A4: differenze della Calibration Table fra verifica di
     # funzionalita' finale e iniziale (Appendice D tab. D6, campi 22-25).
     for campo in ("a1", "a2", "a3", "a4"):
-        if summary.get(campo) is not None:
+        if summary.get(campo) is not None and col.get(campo):
             ws.cell(row=row, column=col[campo]).value = summary[campo]
 
     # La colonna Note del modulo consegna e' un campo che l'operatore legge
@@ -202,7 +211,8 @@ def create_excel_from_summary(summary: dict, output_path: str | Path,
         note.append("colonne non riconosciute dalle intestazioni: "
                     + ", ".join(ripiego_scritte))
 
-    ws.cell(row=row, column=col["note"]).value = " | ".join(note)
+    if col.get("note"):
+        ws.cell(row=row, column=col["note"]).value = " | ".join(note)
 
     # Il file consegnato contiene il solo Modulo consegna. Gli altri fogli
     # del template (Anomalie) e il foglio tecnico si aggiungono solo se

@@ -273,6 +273,13 @@ master_file = st.file_uploader(
     "vengono presi da qui in base alla matricola",
     type=["xlsx", "xlsm"],
 )
+template_file = st.file_uploader(
+    "Opzionale: il vostro modulo consegna vuoto (.xlsx). Se non lo carichi "
+    "viene usato il modello Lab12 incluso nell'app",
+    type=["xlsx", "xlsm"],
+    key="template_modulo",
+)
+
 photo_file = st.file_uploader(
     "Opzionale: foto targa/pozzetto da mantenere nella sessione",
     type=["jpg", "jpeg", "png"],
@@ -342,6 +349,14 @@ with col1:
                 st.session_state["acq_meta"] = acq_meta
                 st.session_state["tradb_info"] = tradb_info
                 st.session_state["tradb_path"] = str(inventory["tradb"][0]) if inventory["tradb"] else ""
+                if template_file:
+                    tmp_tpl = (Path(tempfile.mkdtemp(prefix="nexcommon_tpl_"))
+                               / template_file.name)
+                    tmp_tpl.write_bytes(template_file.getbuffer())
+                    st.session_state["template_path"] = str(tmp_tpl)
+                else:
+                    st.session_state.pop("template_path", None)
+
                 st.session_state["calibration"] = data.get("calibration", {})
                 st.session_state["valutazione"] = data.get("valutazione", {})
                 st.success(
@@ -361,6 +376,7 @@ with col2:
             outpath = outdir / f"Modulo_ITS_{matricola}.xlsx"
             create_excel_from_summary(
                 st.session_state["summary"], outpath,
+                template_path=st.session_state.get("template_path"),
                 foglio_tecnico=st.session_state.get("foglio_tecnico", False),
             )
             st.session_state["excel_path"] = str(outpath)

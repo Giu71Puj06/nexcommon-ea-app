@@ -81,9 +81,13 @@ def mappa_colonne(ws) -> tuple[dict, list[str]]:
             if valore:
                 testi.setdefault(col, []).append(valore)
 
-    mappa, ripiego = {}, []
+    mappa: dict[str, int | None] = {}
     occupate: set[int] = set()
 
+    # Passo 1: assegna tutto cio' che si riconosce dalle intestazioni.
+    # Va completato prima dei ripieghi, altrimenti un ripiego assegnato
+    # presto occuperebbe una colonna che un campo successivo avrebbe
+    # riconosciuto dal proprio titolo, sfasando tutta la mappa.
     for campo, pattern_list in INTESTAZIONI.items():
         trovata = None
         for pattern in pattern_list:
@@ -98,9 +102,21 @@ def mappa_colonne(ws) -> tuple[dict, list[str]]:
         if trovata:
             mappa[campo] = trovata
             occupate.add(trovata)
+
+    # Passo 2: per i campi rimasti, ripiego sul layout Lab12, ma solo se
+    # quella colonna e' libera. Scrivere nella colonna di un altro campo
+    # e' peggio che non scrivere affatto.
+    ripiego = []
+    for campo in INTESTAZIONI:
+        if campo in mappa:
+            continue
+        candidata = LAYOUT_LAB12[campo]
+        if candidata in occupate:
+            mappa[campo] = None
         else:
-            mappa[campo] = LAYOUT_LAB12[campo]
-            ripiego.append(campo)
+            mappa[campo] = candidata
+            occupate.add(candidata)
+        ripiego.append(campo)
 
     return mappa, ripiego
 
