@@ -88,7 +88,9 @@ def _find_or_next_row(ws, matricola: str, col_matricola: int = 4,
     return candidate_rows[-1]
 
 
-def create_excel_from_summary(summary: dict, output_path: str | Path, template_path: str | Path | None = None) -> Path:
+def create_excel_from_summary(summary: dict, output_path: str | Path,
+                              template_path: str | Path | None = None,
+                              foglio_tecnico: bool = False) -> Path:
     template = Path(template_path) if template_path else TEMPLATE
     wb = load_workbook(template)
     ws = wb["MODULO CONSEGNA"] if "MODULO CONSEGNA" in wb.sheetnames else wb.active
@@ -104,7 +106,8 @@ def create_excel_from_summary(summary: dict, output_path: str | Path, template_p
         if campo in col and valore not in (None, ""):
             ws.cell(row=row, column=col[campo]).value = valore
 
-    ws.cell(row=row, column=col["lab"]).value = summary.get("laboratorio", 12)
+    if summary.get("laboratorio"):
+        ws.cell(row=row, column=col["lab"]).value = summary["laboratorio"]
 
     # Data prova: scritta come vera data Excel e visualizzata GG/MM/AAAA.
     if summary.get("data_prova"):
@@ -163,45 +166,13 @@ def create_excel_from_summary(summary: dict, output_path: str | Path, template_p
         if summary.get(campo) is not None:
             ws.cell(row=row, column=col[campo]).value = summary[campo]
 
+    # La colonna Note del modulo consegna e' un campo che l'operatore legge
+    # a colpo d'occhio: ci va l'esito e cio' che richiede un intervento,
+    # non la diagnostica. I dati di controllo stanno nel foglio tecnico.
     note = []
 
     if esito_in_nota:
         note.append(esito_in_nota)
-
-    if summary.get("ora_inizio_pressurizzazione"):
-        note.append("inizio pressurizzazione "
-                    + str(summary["ora_inizio_pressurizzazione"])
-                    + " (ora di inizio prova da inserire)")
-
-    if summary.get("valutazione_sintesi"):
-        note.append(summary["valutazione_sintesi"])
-
-    if summary.get("gradiente_bar_min") is not None:
-        note.append(f"grad. {summary['gradiente_bar_min']:.3f} bar/min")
-
-    if summary.get("hits_fondo_finale") is not None:
-        note.append(f"FF hits {summary['hits_fondo_finale']}")
-
-    if summary.get("rms_fondo_finale_uv") is not None:
-        note.append(f"RMS FF {summary['rms_fondo_finale_uv']:.2f} uV")
-
-    fonte_p = summary.get("fonte_pressione")
-    if fonte_p and "IP1" not in str(fonte_p):
-        note.append(f"pressioni da {fonte_p}")
-
-    if gamma is not None and summary.get("gamma_source"):
-        note.append(f"Ymax da {summary['gamma_source']}")
-    elif gamma is None:
-        note.append("Ymax assente nel PRIDB: caricare listato/BD o inserirlo a mano")
-
-    stato = summary.get("anagrafica_stato")
-    if stato and "non trovata" in str(stato):
-        note.append("matricola non in anagrafica: Prov./Localita/Cliente da inserire")
-
-    if summary.get("a1") is not None:
-        note.append(f"A1-A4 da {summary.get('a_source', 'Calibration Table')}")
-    else:
-        note.append("A1-A4: colpi di pulsatore non ricostruibili")
 
     if summary.get("a_discrepanza"):
         note.append(summary["a_discrepanza"])
@@ -209,12 +180,41 @@ def create_excel_from_summary(summary: dict, output_path: str | Path, template_p
     if summary.get("verifica_funzionalita") == "non accettabile":
         note.append("verifica di funzionalita finale NON conforme (par. 19)")
 
+    if summary.get("a1") is None:
+        note.append("A1-A4 non ricostruibili: colpi di pulsatore assenti")
+
+    if gamma is None:
+        note.append("Y Max da inserire: assente nel pacchetto")
+
+    fonte_p = summary.get("fonte_pressione")
+    if fonte_p and "IP1" not in str(fonte_p):
+        note.append(f"pressioni ricavate dalla curva ({fonte_p})")
+
+    stato = summary.get("anagrafica_stato")
+    if stato and "non trovata" in str(stato):
+        note.append("matricola non in anagrafica: Localita, Prov. e Cliente da inserire")
+
+    if not summary.get("ora_inizio_manuale"):
+        note.append("ora di inizio prova da inserire")
+
     ripiego_scritte = [c for c in ripiego if c != "esito"]
     if ripiego_scritte:
         note.append("colonne non riconosciute dalle intestazioni: "
                     + ", ".join(ripiego_scritte))
 
     ws.cell(row=row, column=col["note"]).value = " | ".join(note)
+
+    # Il file consegnato contiene il solo Modulo consegna. Gli altri fogli
+    # del template (Anomalie) e il foglio tecnico si aggiungono solo se
+    # richiesti esplicitamente.
+    for nome in list(wb.sheetnames):
+        if nome != ws.title:
+            del wb[nome]
+
+    if not foglio_tecnico:
+        output_path = Path(output_path)
+        wb.save(output_path)
+        return output_path
 
     # Foglio tecnico con tutti i dati estratti, per audit e debugging.
     if "Dati Vallen" in wb.sheetnames:

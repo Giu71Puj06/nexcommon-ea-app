@@ -207,7 +207,38 @@ def detect_pressurization_window(pressure_points: list, markers: dict) -> dict:
     }
 
 
+def trova_bd_nel_pacchetto(pridb_path: Path) -> str | None:
+    """
+    Il record BD viaggia dentro il pacchetto Vallen, accanto al .pridb:
+    stesso nome con suffisso _BD.txt invece di _EA. Se c'e', va usato
+    senza chiedere all'operatore di caricarlo una seconda volta.
+    """
+    pridb_path = Path(pridb_path)
+    radici = [pridb_path.parent, pridb_path.parent.parent]
+    for radice in radici:
+        try:
+            candidati = sorted(radice.rglob("*_BD.txt"))
+        except OSError:
+            continue
+        atteso = pridb_path.stem.replace("_EA", "") + "_BD.txt"
+        candidati.sort(key=lambda p: (p.name.lower() != atteso.lower(), len(str(p))))
+        for c in candidati:
+            try:
+                testo = c.read_text(encoding="utf-8", errors="ignore").strip()
+            except OSError:
+                continue
+            if testo:
+                return testo
+    return None
+
+
 def extract_from_pridb(pridb_path: Path, vaex_path: Path | None = None, bd_text: str | None = None) -> dict:
+    # Se non e' stato caricato a parte, il record BD si cerca nel pacchetto.
+    bd_dal_pacchetto = False
+    if not bd_text:
+        bd_text = trova_bd_nel_pacchetto(pridb_path)
+        bd_dal_pacchetto = bd_text is not None
+
     offset, factor = get_pressure_scaling(vaex_path)
     con = sqlite3.connect(str(pridb_path))
     con.row_factory = sqlite3.Row
@@ -347,6 +378,7 @@ def extract_from_pridb(pridb_path: Path, vaex_path: Path | None = None, bd_text:
         "gamma_max": None,
         "gamma_source": "",
         "fonte_pressione": fonte_pressione,
+        "bd_nel_pacchetto": bd_dal_pacchetto,
         "interruzione_precauzionale": "N",
         "fondo_finale_esito": "",
         "classe": "",

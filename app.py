@@ -234,6 +234,19 @@ with st.sidebar:
         step=0.01,
     )
     classe_manuale = st.selectbox("Classe prova", ["", "0", "1", "2"], index=0)
+    laboratorio = st.number_input(
+        "Numero del laboratorio mobile", min_value=1, max_value=99, value=12,
+        step=1, help="Va nella colonna Lab. del modulo.",
+    )
+    st.session_state["laboratorio"] = int(laboratorio)
+    foglio_tecnico = st.checkbox(
+        "Aggiungi foglio tecnico \"Dati Vallen\"",
+        value=False,
+        help="Foglio di controllo con tutti i dati estratti e la loro "
+             "provenienza. Il file consegnato contiene di norma il solo "
+             "Modulo consegna.",
+    )
+    st.session_state["foglio_tecnico"] = foglio_tecnico
     st.info(
         "Gamma Max non è sempre salvato nel PRIDB. "
         "Caricare anche BD.txt/listato quando disponibile."
@@ -281,6 +294,7 @@ with col1:
                     data["summary"]["gamma_source"] = "inserimento manuale"
                 if classe_manuale:
                     data["summary"]["classe"] = classe_manuale
+                data["summary"]["laboratorio"] = st.session_state.get("laboratorio", 12)
 
                 # Integrazione dai dati anagrafici del master (Provincia,
                 # Località, Cliente, Y Max) in base alla matricola.
@@ -290,6 +304,17 @@ with col1:
                     registry = ana.load_registry(tmp_master)
                     record = ana.lookup(registry, data["summary"].get("matricola"))
                     ana.enrich_summary(data["summary"], record)
+
+                # La valutazione va rifatta DOPO il master e l'inserimento
+                # manuale: rivestimento e gamma_max possono arrivare da li'
+                # e cambiano il limite applicabile (0,95 GPOL/CC - 0,87 REAS).
+                from nexcommon_ea.valutazione import valuta
+                data["valutazione"] = valuta(data["summary"],
+                                             data.get("calibration"))
+                data["summary"]["classe_proposta"] = \
+                    data["valutazione"]["classe_proposta"]
+                data["summary"]["valutazione_sintesi"] = \
+                    data["valutazione"]["sintesi"]
                 # Foto contenute nel pacchetto Vallen (dentro lo ZIP).
                 photos = [str(p) for p in pkg.collect_photos(workdir)]
 
@@ -334,7 +359,10 @@ with col2:
             outdir = Path(tempfile.mkdtemp(prefix="nexcommon_excel_"))
             matricola = st.session_state["summary"].get("matricola", "prova")
             outpath = outdir / f"Modulo_ITS_{matricola}.xlsx"
-            create_excel_from_summary(st.session_state["summary"], outpath)
+            create_excel_from_summary(
+                st.session_state["summary"], outpath,
+                foglio_tecnico=st.session_state.get("foglio_tecnico", False),
+            )
             st.session_state["excel_path"] = str(outpath)
             st.success("Excel generato.")
 
