@@ -48,35 +48,52 @@ def get_pressure_scaling(vaex_path: Path | None) -> tuple[float, float]:
 
 
 def infer_from_filename(name: str) -> dict:
-    stem = Path(name).stem.upper().replace("_EA", "")
-    # Pattern observed: 4699292050711MC_EA -> lotto 46992, anno 92, matricola 50711, provincia MC
-    m = re.search(r"(\d{5})(\d{2})(\d{5,7})([A-Z]{2})$", stem)
+    """
+    Decodifica il nome del pacchetto Vallen (regola ITS, 15 caratteri):
+
+        4699301309864MC_EA
+        |____|__|______|__|
+        lotto an matricol pr
+
+      - primi 5 caratteri  = lotto omogeneo, nei master con prefisso L2R
+      - 2 caratteri        = anno di immatricolazione a 2 cifre
+      - 6 caratteri        = numero di matricola, con zeri di riempimento
+      - 2 lettere          = provincia di IMMATRICOLAZIONE (targa)
+
+    Attenzione: la provincia del nome file e' quella di immatricolazione e
+    NON coincide necessariamente con quella di installazione, che e' il
+    dato da riportare nella colonna Prov. del modulo ITS.
+    """
+    stem = Path(name).stem.upper()
+    stem = re.sub(r"_(EA|BD)$", "", stem)
+
+    m = re.search(r"(\d{5})(\d{2})(\d{6})([A-Z]{2})$", stem)
     if m:
+        anno2 = int(m.group(2))
         return {
             "lotto": m.group(1),
+            "lotto_inail": "L2R" + m.group(1),
             "anno": m.group(2),
+            "anno_immatricolazione": 1900 + anno2 if anno2 > 30 else 2000 + anno2,
             "matricola": str(int(m.group(3))),
-            "provincia": m.group(4),
+            "provincia_immatricolazione": m.group(4),
         }
+
+    # Formati non conformi ai 15 caratteri: si recupera il minimo.
     m2 = re.search(r"(\d{4,7})([A-Z]{2})$", stem)
-    return {"matricola": str(int(m2.group(1))) if m2 else "", "provincia": m2.group(2) if m2 else ""}
+    if not m2:
+        return {"matricola": "", "provincia_immatricolazione": ""}
+    return {
+        "matricola": str(int(m2.group(1))),
+        "provincia_immatricolazione": m2.group(2),
+        "nome_non_conforme": True,
+    }
 
 
 def parse_bd_gamma(text: str) -> dict:
-    """Parse optional INAIL BD record. Field 20 is gamma max in Appendix D."""
-    out = {}
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    for ln in lines:
-        parts = ln.split(";")
-        if len(parts) >= 28:
-            out["pressione_inizio_bar"] = _num(parts[16])
-            out["pressione_fine_bar"] = _num(parts[17])
-            out["interruzione_precauzionale"] = parts[18]
-            out["gamma_max"] = _num(parts[19])
-            out["fondo_finale_esito"] = parts[20]
-            out["classe"] = parts[25]
-            return out
-    return out
+    """Record BD INAIL. Delega al parser dedicato (vedi bd_record.py)."""
+    from nexcommon_ea.bd_record import parse_bd_gamma as _parse
+    return _parse(text)
 
 
 def _num(value):
@@ -104,8 +121,7 @@ def parse_gamma_from_text(text: str) -> dict:
 
     # --- Formato BD INAIL (prioritario se presente) ---
     bd = parse_bd_gamma(text)
-    if bd.get("gamma_max") is not None:
-        bd["gamma_source"] = "BD INAIL"
+    if bd:
         return bd
 
     lines = [ln for ln in text.splitlines() if ln.strip()]
@@ -225,6 +241,16 @@ def extract_from_pridb(pridb_path: Path, vaex_path: Path | None = None, bd_text:
             return None
         return min(pressure_points, key=lambda item: abs(item[0] - t))[1]
 
+    # Set di stato (SetType 3): portano l'RMS continuo del rumore di fondo,
+    # che e' la grandezza citata dal par. 16, diversa dall'RMS del singolo hit.
+    stato_rms = [
+        (float(row["Time"]), float(row["RMS"]))
+        for row in con.execute(
+            "select Time, RMS from view_ae_data "
+            "where SetType = 3 and RMS is not null order by Time"
+        )
+    ]
+
     hits = []
     for row in con.execute("select Time, Chan, Amp, Dur, Eny, RMS, Counts, TRAI from view_ae_data where Amp is not null order by Time"):
         amp_uv = float(row["Amp"]) if row["Amp"] is not None else None
@@ -245,7 +271,7 @@ def extract_from_pridb(pridb_path: Path, vaex_path: Path | None = None, bd_text:
         if start_code not in markers or end_code not in markers:
             return {}
         t0, t1 = markers[start_code], markers[end_code]
-        subset = [h for h in hits if t0 <= h["tempo_s"] <= t1 and h["canale"] in (1, 2)]
+        subset = [h for h in hits if t0 <= h["tempo_s"] <= t1]
         pp = [p for p in pressure_points if t0 <= p[0] <= t1]
         return {
             "inizio_s": t0,
@@ -259,6 +285,7 @@ def extract_from_pridb(pridb_path: Path, vaex_path: Path | None = None, bd_text:
             "hits": len(subset),
             "ampiezza_max_db": max([h["ampiezza_db"] for h in subset if h["ampiezza_db"] is not None], default=None),
             "rms_max_uv": max([h["rms_uv"] for h in subset if h["rms_uv"] is not None], default=None),
+            "rms_fondo_uv": max([v for t, v in stato_rms if t0 <= t <= t1], default=None),
             "eventi_ge_75db": sum(1 for h in subset if h["ampiezza_db"] is not None and h["ampiezza_db"] >= 75),
             "eventi_ge_85db": sum(1 for h in subset if h["ampiezza_db"] is not None and h["ampiezza_db"] >= 85),
         }
@@ -298,8 +325,12 @@ def extract_from_pridb(pridb_path: Path, vaex_path: Path | None = None, bd_text:
         "data_prova": acq_start.strftime("%d/%m/%Y") if acq_start else "",
         "ora_acquisizione": acq_start.strftime("%H:%M") if acq_start else "",
         "matricola": inferred.get("matricola", ""),
-        "provincia": inferred.get("provincia", ""),
+        "provincia_immatricolazione": inferred.get("provincia_immatricolazione", ""),
+        "anno_immatricolazione": inferred.get("anno_immatricolazione", ""),
         "lotto": inferred.get("lotto", ""),
+        "lotto_inail": inferred.get("lotto_inail", ""),
+        "provincia": "",
+        "rivestimento": "",
         "pressione_inizio_bar": press.get("pressione_inizio_bar"),
         "pressione_fine_bar": press.get("pressione_fine_bar"),
         "pressione_max_bar": press.get("pressione_max_bar"),
@@ -308,9 +339,9 @@ def extract_from_pridb(pridb_path: Path, vaex_path: Path | None = None, bd_text:
         "ora_inizio_pressurizzazione": press.get("ora_inizio", "")[:5],
         "ora_fine_pressurizzazione": press.get("ora_fine", "")[:5],
         "hits_pressurizzazione": press.get("hits"),
-        "rms_fondo_iniziale_uv": phases["fondo_iniziale"].get("rms_max_uv"),
+        "rms_fondo_iniziale_uv": phases["fondo_iniziale"].get("rms_fondo_uv"),
         "hits_fondo_finale": phases["fondo_finale"].get("hits"),
-        "rms_fondo_finale_uv": phases["fondo_finale"].get("rms_max_uv"),
+        "rms_fondo_finale_uv": phases["fondo_finale"].get("rms_fondo_uv"),
         "eventi_fondo_finale_ge_75db": phases["fondo_finale"].get("eventi_ge_75db"),
         "eventi_fondo_finale_ge_85db": phases["fondo_finale"].get("eventi_ge_85db"),
         "gamma_max": None,
@@ -322,7 +353,14 @@ def extract_from_pridb(pridb_path: Path, vaex_path: Path | None = None, bd_text:
     }
     if bd_text:
         parsed = parse_gamma_from_text(bd_text)
-        summary.update({k: v for k, v in parsed.items() if v is not None and v != ""})
+        # Il lotto del BD ha il prefisso Inail (L2R46187); nel modulo si
+        # riporta la sola parte numerica.
+        if parsed.get("lotto"):
+            summary["lotto_inail"] = parsed["lotto"]
+            parsed = dict(parsed)
+            parsed["lotto"] = re.sub(r"^L\dR", "", parsed["lotto"])
+        summary.update({k: v for k, v in parsed.items()
+                        if v is not None and v != ""})
 
     # Calibration Table -> A1-A4 (verifica di funzionalita, confronto canali).
     try:
@@ -332,7 +370,46 @@ def extract_from_pridb(pridb_path: Path, vaex_path: Path | None = None, bd_text:
             for a in ("A1", "A2", "A3", "A4"):
                 if calib.get(a) is not None:
                     summary[a.lower()] = calib[a]
+            summary["a_source"] = "Calibration Table (pulsing PRIDB)"
+            summary["verifica_funzionalita"] = calib["verifica_funzionalita"]["esito"]
     except Exception:
         calib = {"disponibile": False}
 
-    return {"summary": summary, "phases": phases, "markers": marker_rows, "calibration": calib}
+    # Il record BD serve da riscontro sulle A1-A4: i valori ricostruiti dai
+    # colpi di pulsatore restano primari (sono verificabili in VisualAE),
+    # ma una divergenza va segnalata perche' il BD e' cio' che va a INAIL.
+    if bd_text:
+        parsed = parse_bd_gamma(bd_text)
+        bd_a = [parsed.get(k) for k in ("a1", "a2", "a3", "a4")]
+        calc_a = [summary.get(k) for k in ("a1", "a2", "a3", "a4")]
+        if any(v is not None for v in bd_a):
+            summary["a_bd"] = bd_a
+            if all(v is None for v in calc_a):
+                for chiave, valore in zip(("a1", "a2", "a3", "a4"), bd_a):
+                    summary[chiave] = valore
+                summary["a_source"] = parsed.get("a_source", "record BD INAIL")
+            elif bd_a != calc_a:
+                summary["a_discrepanza"] = (
+                    f"Calibration Table {calc_a} vs record BD {bd_a}: "
+                    f"verificare quale valore e' stato trasmesso a INAIL"
+                )
+        # Anagrafica di ripiego quando il master non e' stato caricato.
+        for da, a in (("provincia_installazione", "provincia"),
+                      ("comune", "localita"),
+                      ("proprietario", "cliente"),
+                      ("rivestimento", "rivestimento")):
+            if parsed.get(da) and not summary.get(a):
+                summary[a] = parsed[da]
+
+    from nexcommon_ea.valutazione import valuta
+    valutazione = valuta(summary, calib)
+    summary["classe_proposta"] = valutazione["classe_proposta"]
+    summary["valutazione_sintesi"] = valutazione["sintesi"]
+
+    return {
+        "summary": summary,
+        "phases": phases,
+        "markers": marker_rows,
+        "calibration": calib,
+        "valutazione": valutazione,
+    }

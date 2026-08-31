@@ -318,6 +318,7 @@ with col1:
                 st.session_state["tradb_info"] = tradb_info
                 st.session_state["tradb_path"] = str(inventory["tradb"][0]) if inventory["tradb"] else ""
                 st.session_state["calibration"] = data.get("calibration", {})
+                st.session_state["valutazione"] = data.get("valutazione", {})
                 st.success(
                     f"Dati estratti. Trovate {len(photos)} foto e "
                     f"{tradb_info.get('forme_onda', 0)} forme d'onda nel pacchetto."
@@ -438,33 +439,97 @@ if st.session_state.get("photos"):
 # --- Calibration Table (verifica di funzionalità -> A1-A4) ------------------
 if st.session_state.get("calibration", {}).get("disponibile"):
     cal = st.session_state["calibration"]
-    with st.expander("Calibration Table (verifica funzionalità → A1-A4)"):
+    canali = cal.get("canali", [])
+    with st.expander("Calibration Table (verifica funzionalità → A1-A4)", expanded=True):
         st.caption(
-            "Ampiezze di auto-impulso e ricevute per canale, all'inizio e alla "
-            "fine prova. A1-A4 = variazione (finale − iniziale). Confronta con "
-            "la pagina Calibration Table di VisualAE."
+            "Matrice Aij delle ampiezze medie: riga = sensore pulsante, "
+            "colonna = sensore ricevente. A1-A4 sono le differenze fra "
+            "verifica finale e iniziale delle celle A12, A21, A34, A43 "
+            "(Appendice D, tab. D6, campi 22-25). Confronta con la pagina "
+            "Calibration Table di VisualAE."
         )
-        righe_cal = []
-        for fase, key in [("Iniziale", "iniziale"), ("Finale", "finale")]:
-            tab = cal.get(key, {})
-            for ch in cal.get("canali", []):
-                v = tab.get(ch, {})
-                righe_cal.append({
-                    "Fase": fase,
-                    "Canale": ch,
-                    "Auto-impulso (dB)": v.get("self"),
-                    "Ricevuta (dB)": v.get("recv"),
-                })
-        if righe_cal:
-            st.dataframe(pd.DataFrame(righe_cal), use_container_width=True, hide_index=True)
+
+        def _tabella(matrice: dict) -> pd.DataFrame:
+            return pd.DataFrame(
+                [[matrice.get((i, j)) for j in canali] for i in canali],
+                index=[f"pulsa {i}" for i in canali],
+                columns=[f"riceve {j}" for j in canali],
+            )
+
+        c_ini, c_fin = st.columns(2)
+        with c_ini:
+            st.markdown("**Verifica iniziale (dB)**")
+            st.dataframe(_tabella(cal.get("matrice_iniziale", {})),
+                         use_container_width=True)
+        with c_fin:
+            st.markdown("**Verifica finale (dB)**")
+            st.dataframe(_tabella(cal.get("matrice_finale", {})),
+                         use_container_width=True)
+
+        st.markdown("**Differenze finale − iniziale (dB)**")
+        st.dataframe(_tabella(cal.get("matrice_differenze", {})),
+                     use_container_width=True)
+
         cc = st.columns(4)
-        for col, a in zip(cc, ["A1", "A2", "A3", "A4"]):
+        grezzi = cal.get("A_grezzi", {})
+        for col, (a, cella) in zip(cc, [("A1", "A12"), ("A2", "A21"),
+                                        ("A3", "A34"), ("A4", "A43")]):
             val = cal.get(a)
-            col.metric(a, f"{val:+d}" if isinstance(val, int) else "—")
-        st.caption(
-            "Verifica i valori A1-A4 rispetto a VisualAE prima della consegna: "
-            "sono ricostruiti dai dati di pulsing del PRIDB."
-        )
+            crudo = grezzi.get(cella)
+            col.metric(
+                f"{a}  (Δ{cella})",
+                f"{val:+d}" if isinstance(val, int) else "—",
+                f"{crudo:+.1f} dB" if crudo is not None else "coppia assente",
+                delta_color="off",
+            )
+
+        vf = cal.get("verifica_funzionalita", {})
+        if vf.get("esito") == "accettabile":
+            st.success("Verifica di funzionalità finale conforme (par. 19): "
+                       "deviazioni entro 20 dB, scarto fra le deviazioni "
+                       "entro 5 dB.")
+        elif vf.get("esito") == "non accettabile":
+            st.error("Verifica di funzionalità finale NON conforme "
+                     "(par. 19 → classe 0): " + "; ".join(vf.get("motivi", [])))
+        for avviso in cal.get("avvisi", []):
+            st.warning(avviso)
+
+        if st.session_state.get("summary", {}).get("a_discrepanza"):
+            st.warning(st.session_state["summary"]["a_discrepanza"])
+
+# --- Valutazione della prova (par. 16-24) -----------------------------------
+if st.session_state.get("valutazione"):
+    val = st.session_state["valutazione"]
+    with st.expander("Valutazione della prova (Procedura EA, par. 16-24)"):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Rivestimento", val.get("rivestimento", "—"))
+        gm = val.get("gamma_max")
+        c2.metric("γmax", f"{gm:.2f}" if gm is not None else "—",
+                  f"limite {val.get('gamma_lim'):.2f}", delta_color="off")
+        c3.metric("Classe proposta",
+                  val.get("classe_proposta") or "—",
+                  val.get("etichetta_classe", ""), delta_color="off")
+
+        controlli = val.get("controlli", [])
+        if controlli:
+            st.dataframe(
+                pd.DataFrame(controlli).rename(columns={
+                    "voce": "Controllo", "riferimento": "Riferimento",
+                    "esito": "Esito", "dettaglio": "Dettaglio",
+                }),
+                use_container_width=True, hide_index=True,
+            )
+
+        if val.get("motivi"):
+            st.markdown("**Motivazioni della proposta**")
+            for m in val["motivi"]:
+                st.markdown(f"- {m}")
+
+        st.markdown("**Restano a carico dell'operatore**")
+        for d in val.get("da_verificare", []):
+            st.markdown(f"- {d}")
+
+        st.info(val.get("avvertenza", ""))
 
 # --- Log di acquisizione ----------------------------------------------------
 if st.session_state.get("acq_meta"):
